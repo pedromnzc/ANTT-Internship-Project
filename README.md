@@ -11,6 +11,7 @@ project/
 │
 ├── data/
 ├── scripts/  # Script em Quarto Markdown
+├── outputs/
 ├── README.md
 └── requirements.txt
 ```

@@ -1,0 +1,1439 @@
+---
+title: "Análise e Tratamento de Dados para Desafio Técnico – Estágio COATD/OUVIDORIA/ANTT"
+subtitle: "Análise de Manifestações da Ouvidoria - ANTT"
+author: 
+  - name: "Pedro Muniz Cherulli"
+    affiliation: "UniCEUB – Ciência de Dados"
+    orcid: "0009-0000-0282-5776"
+date: "`r Sys.Date()`"
+lang: pt-BR
+keywords: [Análise Exploratória, R, Python, Ciência de Dados, Ouvidoria, ANTT]
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    theme: cosmo
+
+params:
+  env_name: "D:/venvs/antt"
+---
+
+# Visão Geral da Base de Dados
+
+A base de dados utilizada neste relatório é composta pelos registros de manifestações encaminhadas à Ouvidoria da **Agência Nacional de Transportes Terrestres** (ANTT) ao longo dos anos de **2022** e **2023**. Tais registros representam um insumo fundamental para a compreensão das demandas, reclamações, denúncias, solicitações e sugestões apresentadas pelos usuários dos serviços regulados pela Agência, possibilitando a análise das interações estabelecidas entre a **ANTT** e a sociedade.
+
+As informações encontram-se organizadas em formato **tabular**, no qual cada linha corresponde a uma manifestação registrada e cada coluna representa um atributo associado ao protocolo, ao usuário, à forma de recebimento, à classificação temática e ao tratamento institucional da demanda. As variáveis disponíveis abrangem, entre outros aspectos, dados temporais, características do manifestante, meios de contato, tipificação da manifestação, estrutura organizacional responsável, níveis hierárquicos de assunto e informações sobre empresas eventualmente relacionadas ao registro.
+
+As principais colunas presentes na base de dados são descritas a seguir:
+
+-   `protocolo`: Identificador único da manifestação.
+-   `mensagem`: Texto da manifestação registrada pelo usuário.
+-   `data_cadastro_protocolo`: Data de registro da manifestação.
+-   `tipo_usuario`: Categoria do usuário (ex.: Pessoa Física, Pessoa Jurídica e Anônima).
+-   `forma_resposta`: Meio escolhido pelo usuário para receber a resposta da Ouvidoria (auto consulta pela internet, carta, e-mail e telefone).
+-   `forma_recebimento`: Meio pelo qual a manifestação foi recebida (ex.: formulário online, telefone).
+-   `situacao`: Status atual da manifestação (ex.: Concluída).
+-   `tipo_mensagem`: Classificação da manifestação (ex.: Reclamação, Sugestão...)
+-   `assunto_nivel_1` a `assunto_nivel_5`: Hierarquia de categorias que detalham o assunto da manifestação.
+-   `estrutura_organizacional`: Unidade responsável pelo atendimento da manifestação.
+-   `local_ocorrencia_uf`: Estado onde ocorreu o fato relatado.
+-   `local_ocorrencia_cidade`: Cidade onde ocorreu o fato relatado.
+-   `empresa`: Empresa relacionada à manifestação, se aplicável.
+-   `nova_empresa`: Nome da empresa mencionada pelo usuário na manifestação, quando não consta na lista de empresas existentes no sistema.
+-   `prefixo_linha`: Prefixo da linha de transporte (Formato: NN-NNNN-NN).
+-   `linha`: Linha de transporte descrita de forma textual (ex.: Nome do município (UF) – Nome do município (UF)).
+-   `origem`: Local de embarque do usuário.
+-   `destino`: Local de desembarque do usuário.
+
+É importante ressaltar que o processo de tratamento e análise dos dados foi desenvolvido de forma iterativa, orientado por uma [**linha de raciocínio construída progressivamente**]{.underline} a partir da exploração da base. Dessa forma, as decisões metodológicas adotadas não refletem, necessariamente, a abordagem mais eficiente do ponto de vista computacional ou técnico, mas sim aquelas que se mostraram coerentes com o aprofundamento gradual na complexidade dos dados e com a validação das hipóteses levantadas ao longo da análise.
+
+# Tratamento e Preparação dos Dados
+
+*Python* e *R* foram utilizados **de forma integrada** para o tratamento e análise dos dados, aproveitando as capacidades específicas de cada linguagem. O *Python* foi empregado principalmente para o **carregamento, manipulação e transformação dos dados**, enquanto o *R* foi utilizado para a **orquestração do fluxo de trabalho, documentação e geração do relatório final.**
+
+```{r include=FALSE}
+env_name <- params$env_name
+
+python_path <- Sys.which('python')
+
+Sys.setlocale("LC_TIME", "pt_BR.UTF-8")
+```
+
+```{r include=FALSE}
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+
+pacman::p_load(
+  reticulate,
+  knitr,
+  rmarkdown
+) 
+
+if (!virtualenv_exists(env_name)) {
+  virtualenv_create(env_name, python = python_path)
+}
+
+use_virtualenv(env_name, required = TRUE)
+
+py_pkgs <- c(
+  "pandas",
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "plotly",
+  "scikit-learn",
+  "requests",
+  "pyarrow"
+)
+
+installed_pkgs <- py_list_packages()$package
+missing_pkgs <- setdiff(py_pkgs, installed_pkgs)
+
+if (length(missing_pkgs) > 0) {
+  py_install(missing_pkgs, pip = TRUE)
+}
+```
+
+## Carregamento e Integração dos Dados
+
+O processo de carregamento dos dados foi estruturado de forma a garantir reprodutibilidade, integridade e rastreabilidade das informações utilizadas na análise. As bases de dados referentes aos anos de **2022** e **2023** são obtidas diretamente do portal oficial de dados abertos da **Agência Nacional de Transportes Terrestres** (ANTT), no formato CSV.
+
+Com o objetivo de tornar o fluxo de execução autossuficiente, foi implementada uma verificação prévia da existência dos arquivos no ambiente local. Caso os arquivos não estejam disponíveis localmente, o procedimento realiza **automaticamente** o download das bases correspondentes por meio do **portal da ANTT**, assegurando que a análise possa ser reproduzida sem dependências manuais externas. O mesmo procedimento é aplicado ao **dicionário de dados**, disponibilizado em formato *PDF*, o qual subsidia a correta interpretação das variáveis presentes na base.
+
+Após o carregamento individual das bases anuais, os dados são integrados por meio da concatenação dos *DataFrames* em uma única estrutura analítica. Essa consolidação é necessária para permitir análises conjuntas, comparações temporais e a aplicação uniforme das etapas subsequentes de tratamento
+
+Ao Final a memória é liberada dos objetos temporários utilizados durante o processo de carregamento e integração, otimizando o uso dos **recursos computacionais disponíveis**.
+
+```{python echo=FALSE}
+import pandas as pd
+import requests
+import os
+import gc
+from pathlib import Path
+
+BASE_DIR = Path(os.getcwd()).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
+
+urls_csv = {
+    2022: "https://dados.antt.gov.br/dataset/79c4f828-ef9b-42f9-aee7-ce1220b6d598/resource/692f24f2-2a03-41e8-8463-dbb15f1c4392/download/manifestacoes_de_ouvidoria_2022.csv",
+    2023: "https://dados.antt.gov.br/dataset/79c4f828-ef9b-42f9-aee7-ce1220b6d598/resource/3dbf6dcf-8d9e-49b6-a107-5f03b2673e7c/download/manifestacoes_de_ouvidoria_2023.csv"
+}
+
+
+url_dicionario = "https://dados.antt.gov.br/dataset/79c4f828-ef9b-42f9-aee7-ce1220b6d598/resource/94a2434c-fb59-4c7f-ac31-57d0170c3333/download/manifestacoes_ouvidoria_dicionario_dados.pdf"
+
+arquivo_dicionario = DATA_DIR / "manifestacoes_ouvidoria_dicionario_dados.pdf"
+
+if not arquivo_dicionario.exists():
+    response = requests.get(url_dicionario, timeout=30)
+    response.raise_for_status()
+    arquivo_dicionario.write_bytes(response.content)
+    print("⬇ Dicionário de dados baixado")
+else:
+    print("✔ Dicionário de dados já existe")
+
+dfs = []
+
+for ano, url in urls_csv.items():
+    arquivo_csv = DATA_DIR / f"manifestacoes_de_ouvidoria_{ano}.csv"
+
+    if not arquivo_csv.exists():
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        arquivo_csv.write_bytes(response.content)
+        print(f"⬇ CSV {ano} baixado")
+    else:
+        print(f"✔ CSV {ano} usado localmente")
+
+    df_tmp = pd.read_csv(arquivo_csv, encoding="latin1", sep=";")
+    dfs.append(df_tmp)
+
+df = pd.concat(dfs, ignore_index=True)
+print("✔ Dados carregados com sucesso")
+
+del dfs
+del df_tmp
+gc.collect()
+
+print("⬇ Objetos temporários removidos da memória")
+```
+
+## Transformação dos Dados em Parquet e Remoção dos Arquivos .CSV
+
+A transformação dos dados para o formato *Parquet* foi realizada com o objetivo de otimizar o armazenamento e a manipulação da base de dados, garantindo maior eficiência em termos de espaço e velocidade de leitura. O formato *Parquet* é especialmente adequado para bases de dados volumosas, como a presente, devido à sua capacidade de compressão e ao suporte a esquemas de dados complexos. A conversão para *Parquet* também facilita a integração com ferramentas de análise e visualização, além de permitir uma melhor organização dos dados para as etapas subsequentes de tratamento e análise exploratória.
+
+```{python}
+import pandas as pd
+
+arquivo_parquet = DATA_DIR / "manifestacoes_de_ouvidoria.parquet"
+
+df.to_parquet(
+    arquivo_parquet,
+    index=False
+)
+print("Base de dados salva em:", arquivo_parquet)
+
+for ano in urls_csv.keys():
+    arquivo_csv = DATA_DIR / f"manifestacoes_de_ouvidoria_{ano}.csv"
+    if arquivo_csv.exists():
+        arquivo_csv.unlink()
+        print(f"CSV {ano} removido")
+
+```
+
+## Análise Exploratória Inicial dos Dados
+
+A etapa de análise exploratória tem como objetivo compreender a estrutura geral da base de dados após sua consolidação, permitindo identificar características fundamentais que orientam as decisões de tratamento subsequentes. Nessa fase, são avaliadas a dimensionalidade do *DataFrame*, os tipos **atribuídos a cada variável**, a **presença de valores ausentes** e o **comportamento básico das distribuições categóricas**.
+
+A inspeção dos tipos de dados possibilita verificar inconsistências de leitura, como **variáveis temporais interpretadas como texto**, enquanto a análise de valores faltantes fornece subsídios para decidir entre imputação, **manutenção** ou eventual **exclusão** de informações. Adicionalmente, a identificação da **moda** por coluna auxilia na compreensão dos **valores predominantes**, especialmente em variáveis categóricas, contribuindo para a avaliação da representatividade dos dados.
+
+Essa análise não tem caráter conclusivo, mas exploratório, servindo como base para as decisões metodológicas adotadas ao longo do pipeline de tratamento, sempre respeitando a **estrutura original da base** e o contexto de geração dos dados.
+
+```{python echo=FALSE}
+import pandas as pd
+
+pd.set_option('display.max_columns', None)
+print(df.shape, "\n")
+print(df.info(), "\n")
+print("Valores faltantes (NAs):\n", df.isnull().sum(), "\n")
+print("Moda por coluna:\n", df.mode().iloc[0])
+```
+
+## Remoção de Colunas Irrelevantes
+
+A remoção de colunas foi orientada tanto por critérios técnicos quanto pela compreensão progressiva da utilidade analítica de cada variável. As colunas excluídas apresentavam uma combinação de **baixa taxa de preenchimento** ou operacional e **ausência de impacto** direto nos objetivos analíticos propostos.
+
+Optou-se por **não** realizar imputação nesses casos, uma vez que o **preenchimento artificial** poderia introduzir vieses ou interpretações equivocadas, especialmente em variáveis cuja ausência reflete limitações do próprio processo de registro das manifestações. Dessa forma, a exclusão dessas colunas contribui para a redução da dimensionalidade do conjunto de dados, melhora a eficiência computacional e preserva a integridade analítica da base consolidada.
+
+As colunas removidas são:
+
+-   `local_ocorrencia_uf`
+-   `local_ocorrencia_cidade`
+-   `nova_empresa`
+-   `prefixo_linha`
+-   `linha`
+-   `origem`
+-   `destino`
+
+```{python echo=FALSE}
+import pandas as pd
+
+df = df.drop(columns=["local_ocorrencia_uf",
+    "local_ocorrencia_cidade",
+    "nova_empresa",
+    "prefixo_linha",
+    "linha",
+    "origem",
+    "destino"])
+    
+print("Colunas removidas. Novo formato do DataFrame:", df.shape, "\n")
+```
+
+## Conversão e Padronização de Tipos de Dados
+
+A conversão de tipos de dados foi realizada com o objetivo de garantir **consistência semântica** e **eficiência** no armazenamento e processamento das informações. A variável de data `data_cadastro_protocolo` foi convertida para o tipo *datetime*, assegurando sua correta interpretação temporal e permitindo operações cronológicas confiáveis nas etapas subsequentes da análise. A partir dessa variável temporal, foram criadas as variáveis derivadas `ano` e `mes`, extraídas diretamente do **registro de data**, com a finalidade de viabilizar análises comparativas entre períodos distintos, especialmente no que se refere à quantificação anual de manifestações.
+
+Adicionalmente, variáveis categóricas foram explicitamente convertidas para o tipo `category`, o que não apenas **reduz o consumo de memória**, mas também reforça o **caráter qualitativo** dessas informações. Essa decisão reflete a compreensão de que tais campos representam categorias **fechadas ou semiestruturadas**, e **não valores textuais livres**.
+
+```{python echo=FALSE}
+df["data_cadastro_protocolo"] = pd.to_datetime(df["data_cadastro_protocolo"], format="%d-%m-%Y", errors="coerce").dt.normalize()
+print("Coluna 'data_cadastro_protocolo' convertida para datetime.\n")
+
+df["ano"] = df["data_cadastro_protocolo"].dt.year
+df["ano"] = df["ano"].astype("int64")
+print("Coluna 'ano' criada a partir de 'data_cadastro_protocolo'.")
+df["mes"] = df["data_cadastro_protocolo"].dt.month
+print("Coluna 'mes' criada a partir de 'data_cadastro_protocolo'.")
+
+cols_category = [
+    "tipo_usuario",
+    "forma_resposta",
+    "forma_recebimento",
+    "situacao",
+    "tipo_mensagem",
+    "estrutura_organizacional",
+    "assunto_nivel_1",
+    "assunto_nivel_2",
+    "assunto_nivel_3",
+    "assunto_nivel_4",
+    "assunto_nivel_5",
+    "empresa",
+    "mes"
+]
+
+df[cols_category] = df[cols_category].astype("category")
+print("Colunas categóricas convertidas para 'category'.\n")
+```
+
+## Tratamento de Valores Ausentes nos Níveis de Assunto e Empresa
+
+O tratamento dos valores ausentes nos campos hierárquicos de assunto foi conduzido de forma explícita, substituindo valores nulos pela categoria **“NÃO DETALHADO”**. Essa abordagem foi adotada para preservar a informação de que a manifestação existe, mas não foi classificada em determinado nível, evitando a perda de registros relevantes.
+
+De forma análoga, a variável empresa recebeu a categoria **“NÃO VINCULADA A EMPRESA”**, representando manifestações que não puderam ser associadas a um operador específico. Essa abordagem preserva a rastreabilidade da ausência de informação, evitando que tais registros sejam mascarados por exclusão ou imputações arbitrárias.
+
+É importante ressaltar que, embora a variável `empresa` apresente baixo percentual de preenchimento (aproximadamente **3%**), optou-se por sua manutenção na base de dados por seu **valor informativo** e pelo potencial de utilização em análises futuras, especialmente no contexto de devolutivas institucionais e ***feedback*** **direcionado às empresas** mencionadas nas manifestações.
+
+```{python echo=FALSE}
+cols_assunto = [
+    "assunto_nivel_1",
+    "assunto_nivel_2",
+    "assunto_nivel_3",
+    "assunto_nivel_4",
+    "assunto_nivel_5"
+]
+
+for col in cols_assunto:
+    df[col] = (
+        df[col]
+        .cat.add_categories("NÃO DETALHADO") 
+        .fillna("NÃO DETALHADO") 
+    )
+
+df["empresa"] = (
+    df["empresa"]
+    .cat.add_categories("NÃO VINCULADA A EMPRESA") 
+    .fillna("NÃO VINCULADA A EMPRESA")
+)
+
+print("Valores faltantes (NAs):\n", df.isnull().sum(), "\n")
+```
+
+## Reavaliação da Estrutura da Base Após Tratamentos Iniciais
+
+Após a aplicação dos tratamentos iniciais, realizou-se uma nova inspeção da estrutura do *DataFrame* com o objetivo de validar os efeitos das transformações realizadas. Essa etapa permitiu confirmar a **remoção de valores ausentes**, a **correta atribuição** dos tipos de dados e a **estabilidade dimensional** da base.
+
+A repetição controlada dessa análise faz parte da **linha de pensamento adotada**, na qual cada decisão de tratamento é acompanhada de uma **verificação empírica** de seus impactos, garantindo coerência entre intenção **metodológica** e **resultado prático**.
+
+```{python echo=FALSE}
+import pandas as pd
+
+pd.set_option('display.max_columns', None)
+print(df.shape, "\n")
+print(df.info(), "\n")
+print("Valores faltantes (NAs):\n", df.isnull().sum(), "\n")
+print("Moda por coluna:\n", df.mode().iloc[0])
+```
+
+## Análise da Distribuição das Variáveis Categóricas
+
+A análise dos valores distintos e das contagens por categoria teve como finalidade compreender a distribuição interna das principais variáveis qualitativas da base. Esse procedimento permitiu identificar **categorias dominantes**, **padrões recorrentes** e **possíveis assimetrias** relevantes para a interpretação dos dados.
+
+Essa etapa não teve caráter preditivo, mas **exploratório**, auxiliando na validação das escolhas feitas anteriormente, como a manutenção de determinadas variáveis e a criação de categorias explícitas para valores ausentes.
+
+```{python echo=FALSE}
+colunas = [
+    "tipo_usuario",
+    "forma_resposta",
+    "forma_recebimento",
+    "situacao",
+    "tipo_mensagem",
+    "estrutura_organizacional",
+    "assunto_nivel_1",
+    "assunto_nivel_2",
+    "assunto_nivel_3",
+    "assunto_nivel_4",
+    "assunto_nivel_5"
+]
+
+valores_distintos = {}
+contagens = {}
+
+for col in colunas:
+    valores_distintos[col] = df[col].unique()
+    contagens[col] = df[col].value_counts()
+
+for col in colunas:
+    print(f"\nColuna: {col}")
+    print("Valores distintos:", df[col].nunique())
+    print("Contagem:\n", df[col].value_counts())
+```
+
+## Exclusão da Variável de Situação
+
+A variável `situacao` foi **removida** após análise exploratória indicar **baixa variabilidade informacional** e **sobreposição semântica** com outras variáveis já presentes na base. Sua manutenção **não agregaria valor analítico** adicional proporcional à complexidade introduzida.
+
+Essa decisão reflete a abordagem incremental adotada ao longo do trabalho, na qual variáveis são mantidas ou removidas com base em evidências observadas durante o aprofundamento na estrutura dos dados.
+
+```{python}
+df = df.drop(columns=["situacao"])
+print("Coluna 'situacao' removida. Novo formato do DataFrame:", df.shape)
+```
+
+## Identificação de Recontatos por Protocolo
+
+A criação da variável `qtd_contatos_protocolo` teve como objetivo capturar a recorrência de manifestações associadas a um **mesmo protocolo**, permitindo identificar casos em que um **mesmo usuário** entrou em contato **múltiplas vezes**.
+
+A partir dessa contagem, foi definida a variável **booleana** `recontato`, que sinaliza explicitamente a existência de **múltiplos registros associados ao mesmo protocolo**. Essa abordagem preserva a informação sobre **recorrência** sem eliminar registros **potencialmente relevantes** para a análise do comportamento dos usuários da ouvidoria.
+
+```{python}
+df["qtd_contatos_protocolo"] = (
+    df.groupby("protocolo")["mensagem"]
+      .transform("count")
+)
+
+df["recontato"] = df["qtd_contatos_protocolo"] > 1
+```
+
+## Identificação e Remoção de Duplicatas Puras
+
+A remoção de duplicatas foi conduzida de forma criteriosa, considerando como **duplicatas puras** apenas os registros que **apresentavam igualdade em todas as variáveis relevantes**.
+
+Essa estratégia garante que manifestações com o **mesmo protocolo** sejam mantidas sempre que houver qualquer alteração informacional significativa, **preservando recontatos legítimos** e **variações relevantes** que possuem um **mesmo número de protocolo**. Apenas registros estritamente redundantes foram removidos, resultando em uma base analítica mais enxuta, sem perda de informação substantiva.
+
+```{python echo=FALSE}
+cols_chave = df.columns.difference(["mensagem", "data_cadastro_protocolo", "qtd_contatos_protocolo", "recontato", "ano"])
+duplicatas_puras = df.duplicated(subset=cols_chave, keep="first")
+print("Número de duplicatas puras:", duplicatas_puras.sum())
+print("Percentual de duplicatas puras: {:.2f}%".format((duplicatas_puras.sum() / len(df)) * 100),"\n")
+
+print("Formato do DataFrame antes da remoção de duplicatas puras:", df.shape)
+df = df.loc[~duplicatas_puras].copy()
+print("Novo formato do DataFrame após remoção de duplicatas puras:", df.shape)
+```
+
+## Salvamento da Base de Dados Tratada
+
+Segue o salvamento da base de dados tratada em formato *Parquet*, garantindo a preservação das transformações realizadas e a otimização para futuras análises. O arquivo resultante reflete a estrutura final da base, pronta para ser utilizada na etapa de visualizações e análises exploratórias.
+
+```{python echo=FALSE}
+arquivo_parquet = DATA_DIR / "manifestacoes_de_ouvidoria_tratadas.parquet"
+df.to_parquet(
+    arquivo_parquet,
+    index=False
+)
+print("Base de dados tratada salva em:", arquivo_parquet)
+```
+
+## Conclusão do Tratamento e Preparação dos Dados
+
+O processo de tratamento dos dados permitiu transformar uma base bruta, heterogênea e com elevado volume de registros em uma base **analítica estruturada**, coerente e alinhada aos objetivos do estudo. As decisões adotadas ao longo do *pipeline* não tiveram como foco exclusivo a **otimização técnica**, mas sim a **preservação do significado informacional dos dados**, respeitando a lógica operacional da **Ouvidoria da ANTT**.
+
+A manutenção de colunas com altos percentuais de valores ausentes, aliada à criação explícita de categorias como **“NÃO DETALHADO”** e **“NÃO VINCULADA A EMPRESA”**, possibilitou tratar a ausência de informação como um atributo analítico relevante, e não como uma falha a ser ocultada. Adicionalmente, a conversão criteriosa de tipos de dados, a padronização de datas e a remoção de duplicatas puras garantiram maior consistência, rastreabilidade e confiabilidade à base final.
+
+A estratégia adotada para lidar com protocolos repetidos **preservou manifestações** que apresentavam alterações reais de conteúdo, ao mesmo tempo em que **eliminou redundâncias estruturais**, resultando em um conjunto de dados **mais enxuto** e **informativamente mais rico**. Dessa forma, a base consolidada reflete de maneira mais fiel o comportamento de contato dos usuários com a **Ouvidoria**, incluindo a identificação de recontatos e recorrências.
+
+Com a base devidamente tratada, torna-se possível avançar para a **etapa de visualizações e análises** com maior segurança metodológica. A redução de ruídos, a padronização semântica das variáveis categóricas e a eliminação de duplicidades artificiais permitem que os gráficos e indicadores produzidos reflitam padrões reais de comportamento, e não artefatos do processo de coleta ou registro.
+
+Além disso, a criação de variáveis como `recontato` e `qtd_contatos_protocolo` amplia o potencial analítico da base, viabilizando **visualizações focadas em recorrência**, persistência de demandas e complexidade dos atendimentos. Esses ganhos estabelecem uma base sólida para análises descritivas e exploratórias mais precisas, bem como para futuras extensões analíticas, como segmentações, **comparações temporais** e apoio à **tomada de decisão institucional**.
+
+------------------------------------------------------------------------
+
+# Análise Exploratória com Visão de Negócio
+
+As visualizações a seguir baseiam-se em uma **base previamente tratada**, cujo processo **priorizou a preservação do significado informacional** dos registros e a identificação de **padrões reais** de comportamento dos usuários, evitando distorções causadas por duplicidades artificiais ou imputações arbitrárias.
+
+## Análise Inicial do Volume de Manifestações por Ano
+
+A **análise comparativa** do **número de manifestações** registradas nos anos de **2022** e **2023** revela insights importantes sobre a dinâmica de interação entre os usuários e a **Ouvidoria da ANTT** ao longo do período. A visualização a seguir apresenta o t**otal de manifestações por ano**, permitindo uma avaliação direta das variações anuais no volume de registros.
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+contagem_ano = df['ano'].value_counts().sort_index()
+total_2022 = contagem_ano.get(2022, 0)
+total_2023 = contagem_ano.get(2023, 0)
+
+plt.figure(figsize=(8, 5));
+contagem_ano.plot(kind='bar', color=['skyblue', 'salmon']);
+plt.title('Número de Manifestações por Ano (2022 vs 2023)');
+plt.xlabel('Ano');
+plt.ylabel('Número de Manifestações');
+plt.ylim(0, max(total_2022, total_2023) * 1.1);
+for i, v in enumerate(contagem_ano):
+    plt.text(
+      i,
+      v + (max(total_2022, total_2023) * 0.02),
+      str(v),
+      ha='center',
+      fontweight='bold'
+      );
+plt.xticks(rotation=0);
+plt.show();
+```
+
+A comparação do número total de manifestações por ano evidencia uma **leve redução no volume de registros de 2022 para 2023**, embora os valores permaneçam próximos. Esse comportamento indica uma **relativa estabilidade na demanda da Ouvidoria** ao longo do período analisado, sem variações abruptas que sinalizem mudanças estruturais no padrão de acionamento.
+
+### Tipo de mensagem mais frequente em 2022 e 2023
+
+Após a análise do **volume total de manifestações por ano**, torna-se pertinente aprofundar a compreensão acerca do **perfil dessas manifestações**, com foco no **tipo de mensagem registrado**. Nesse contexto, as visualizações a seguir apresentam a distribuição dos tipos de mensagens mais frequentes nos anos de **2022 e 2023**, possibilitando uma **comparação direta entre os períodos** e a identificação de padrões predominantes no acionamento da Ouvidoria da ANTT.
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df_2022 = df[df['ano'] == 2022]
+tipo_2022 = df_2022['tipo_mensagem'].value_counts()
+
+plt.figure(figsize=(8, 5));
+tipo_2022.plot(kind='bar', color='skyblue');
+
+plt.title('Tipo de Mensagem em 2022');
+plt.xlabel('Tipo de Mensagem');
+plt.ylabel('Número de Manifestações');
+plt.ylim(0, max(tipo_2022) * 1.15);
+
+for i, v in enumerate(tipo_2022):
+    plt.text(
+        i,
+        v + (max(tipo_2022) * 0.02),
+        str(v),
+        ha='center',
+        va='bottom',
+        fontweight='bold'
+    );
+
+plt.xticks(rotation=45, ha='right');
+plt.tight_layout();
+plt.show();
+
+
+df_2023 = df[df['ano'] == 2023]
+tipo_2023 = df_2023['tipo_mensagem'].value_counts()
+
+plt.figure(figsize=(8, 5));
+tipo_2023.plot(kind='bar', color='salmon');
+
+plt.title('Tipo de Mensagem em 2023');
+plt.xlabel('Tipo de Mensagem');
+plt.ylabel('Número de Manifestações');
+plt.ylim(0, max(tipo_2023) * 1.15);
+
+for i, v in enumerate(tipo_2023):
+    plt.text(
+        i,
+        v + (max(tipo_2023) * 0.02),
+        str(v),
+        ha='center',
+        va='bottom',
+        fontweight='bold'
+    );
+
+plt.xticks(rotation=45, ha='right');
+plt.tight_layout();
+plt.show();
+```
+
+A análise dos gráficos demonstra que, embora o **Pedido de Informação** permaneça como o tipo de mensagem mais frequente em ambos os anos, observa-se uma **mudança relevante no comportamento das manifestações** entre 2022 e 2023. Em particular, o volume de **Reclamações apresentou crescimento expressivo no período**, aproximadamente dobrando de um ano para o outro, o que indica um aumento significativo no registro de insatisfações ou problemas relatados pelos usuários. Em contraste, as demais categorias mantiveram padrões relativamente estáveis, com **Outras Solicitações** permanecendo como o segundo tipo mais recorrente e **Sugestões, Elogios e Denúncias** apresentando participação residual. Esse resultado sinaliza uma possível intensificação de conflitos ou falhas percebidas pelos usuários em 2023, aspecto que merece atenção em análises subsequentes.
+
+### Aprofundamento na análise dos tipos de mensagem
+
+Devido à relevância observada no aumento das **Reclamações** em 2023, torna-se pertinente aprofundar a análise para compreender melhor os fatores subjacentes a esse comportamento. A visualização a seguir detalha a distribuição dos tipos de mensagens, com foco especial nas **Reclamações**, permitindo identificar categorias específicas que possam estar contribuindo para o crescimento observado.
+
+```{python echo=FALSE}
+import pandas as pd
+import plotly.express as px
+
+df_reclam = df.loc[df['tipo_mensagem'] == 'Reclamação', ['assunto_nivel_1', 'ano']].copy()
+
+top_assuntos = df_reclam['assunto_nivel_1'].value_counts().head(3).index.tolist()
+df_top = df_reclam[df_reclam['assunto_nivel_1'].isin(top_assuntos)].copy()
+
+df_top['assunto_nivel_1'] = df_top['assunto_nivel_1'].astype(str)
+
+df_contagem = df_top.groupby(['ano', 'assunto_nivel_1']).size().reset_index(name='quantidade')
+
+fig1 = px.bar(
+    df_contagem,
+    x='ano',
+    y='quantidade',
+    color='assunto_nivel_1',
+    barmode='group',
+    title='Comparativo dos 3 principais assuntos de Reclamação por Ano',
+    labels={'quantidade': 'Número de Reclamações', 'ano': 'Ano', 'assunto_nivel_1': 'Assunto'}
+)
+fig1.show()
+```
+
+A análise dos gráficos demonstra que, embora **Transporte Rodoviário de Passageiros** permaneça como o assunto mais frequente em ambos os anos, observa-se uma **mudança relevante no comportamento das manifestações** entre 2022 e 2023. Em especial, o volume de **Transporte Rodoviário de Passageiros apresentou crescimento expressivo** — mais que o dobro de um ano para o outro — indicando aumento significativo nas manifestações dos usuários.
+
+> A Agência Nacional de Transportes Terrestres (ANTT) realizou uma audiência pública para discutir o **aprimoramento do fluxo de reclamações dos usuários**, com o objetivo de melhorar os mecanismos de atendimento e incentivar a resolução de conflitos diretamente com as empresas prestadoras de serviços, o que reforça a importância de análises detalhadas sobre o aumento das reclamações observadas neste período.
+>
+> [Audiência Pública na ANTT debate aprimoramento do fluxo de reclamações dos usuários](https://agenciagov.ebc.com.br/noticias/202309/audiencia-publica-debate-aprimoramento-do-fluxo-de-reclamacoes-dos-usuarios)
+
+Principais assuntos por ano:
+
+-   **2022**
+
+    -   Transporte Rodoviário de Passageiros: 24.379
+    -   Transporte Rodoviário de Cargas: 3.187
+    -   Atendimento da Ouvidoria: 1.710
+
+-   **2023**
+
+    -   Transporte Rodoviário de Passageiros: 53.031
+    -   Atendimento da Ouvidoria: 2.794
+    -   Transporte Rodoviário de Cargas: 2.505
+
+As demais categorias mantiveram padrões relativamente estáveis. O aumento mais expressivo em **Transporte Rodoviário de Passageiros** sinaliza **intensificação de demandas e conflitos percebidos pelos usuários**, aspecto que merece atenção em análises subsequentes para aprimorar os canais de atendimento e resposta a reclamações.
+
+### Empresas com Maiores Números de Reclamações
+
+Como descrito pela matéria apresentada anteriormente o aumento expressivo nas **reclamações** relacionadas ao **Transporte Rodoviário de Passageiros** em 2023, torna-se relevante identificar quais empresas estão associadas ao maior número de registros nesse tipo de manifestação. A visualização a seguir apresenta as **top 5 empresas com maior número de reclamações** nos anos de 2022 e 2023, permitindo uma análise comparativa e a identificação de possíveis tendências ou mudanças no comportamento dos usuários em relação aos operadores de transporte.
+
+```{python echo=FALSE}
+import pandas as pd
+import plotly.express as px
+
+df_reclam_empresas = df.loc[
+    (df['tipo_mensagem'] == 'Reclamação') & 
+    (df['assunto_nivel_1'] == 'TRANSPORTE RODOVIÁRIO DE PASSAGEIROS') &
+    (df['empresa'] != 'NÃO VINCULADA A EMPRESA'),
+    ['empresa', 'ano']
+].copy()
+
+top_empresas_2022 = df_reclam_empresas[df_reclam_empresas['ano'] == 2022]['empresa'].value_counts().head(5).index.tolist()
+top_empresas_2023 = df_reclam_empresas[df_reclam_empresas['ano'] == 2023]['empresa'].value_counts().head(5).index.tolist()
+
+top_empresas = list(set(top_empresas_2022 + top_empresas_2023))
+
+df_top_empresas = df_reclam_empresas[df_reclam_empresas['empresa'].isin(top_empresas)].copy()
+df_top_empresas['empresa'] = df_top_empresas['empresa'].astype(str)
+
+df_contagem_empresas = df_top_empresas.groupby(['ano', 'empresa']).size().reset_index(name='quantidade')
+
+fig2 = px.bar(
+    df_contagem_empresas,
+    x='ano',
+    y='quantidade',
+    color='empresa',
+    barmode='group',
+    title='Top 5 Empresas com Maior Número de Reclamações em Transporte Rodoviário de Passageiros',
+    labels={'quantidade': 'Número de Reclamações', 'ano': 'Ano', 'empresa': 'Empresa'}
+)
+fig2.show()
+```
+
+A análise dos gráficos revela que algumas empresas mantiveram posições de destaque em ambos os anos, enquanto outras apresentaram variações significativas no número de reclamações. A empresa com o maior número de reclamações em 2022 continuou a liderar em 2023, indicando uma persistência nas questões enfrentadas pelos usuários. No entanto, outras empresas mostraram aumentos ou diminuições notáveis, sugerindo mudanças na percepção dos usuários ou na qualidade dos serviços prestados. É importante destacar que nem todas as reclamações relacionadas ao **Transporte Rodoviário de Passageiros** estavam vinculadas a empresas, o que explica por que aproximadamente apenas 10% dos registros aparecem no gráfico anterior. Isso levanta a questão de saber se essas manifestações realmente não tinham relação com empresas específicas ou se houve algum **erro ou inconsistência no preenchimento das informações**.
+
+## Tipos de Usuário que mais Acionam a Ouvidoria
+
+A análise dos tipos de usuário que mais acionam a Ouvidoria da ANTT permite compreender o perfil dos manifestantes e identificar segmentos específicos que demandam maior atenção. A visualização a seguir apresenta a distribuição dos tipos de usuário ao longo do período analisado, destacando aqueles que mais frequentemente recorrem aos canais de comunicação da Ouvidoria.
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+contagem_tipo_usuario = df['tipo_usuario'].value_counts()
+
+plt.figure(figsize=(8, 5));
+contagem_tipo_usuario.plot(kind='bar', color='lightgreen');
+plt.title('Tipos de Usuário que mais Acionam a Ouvidoria');
+plt.xlabel('Tipo de Usuário');
+plt.ylabel('Número de Manifestações');
+plt.ylim(0, max(contagem_tipo_usuario) * 1.15);
+for i, v in enumerate(contagem_tipo_usuario):
+    plt.text(
+      i,
+      v + (max(contagem_tipo_usuario) * 0.02),
+      str(v),
+      ha='center',
+      fontweight='bold'
+      );
+plt.xticks(rotation=45, ha='right');
+plt.ticklabel_format(axis='y', style='plain')
+plt.tight_layout();
+plt.show();
+```
+
+A análise do gráfico revela que as **Pessoas Físicas** são o grupo que mais aciona a Ouvidoria da ANTT, representando a maior parte das manifestações registradas. Esse comportamento é esperado, uma vez que pessoas físicas são os principais beneficiários dos serviços regulados pela agência e, portanto, têm maior propensão a relatar problemas, solicitar informações ou expressar opiniões sobre a qualidade dos serviços prestados. Outros tipos de usuário, como **Pessoa Jurídica** e **Anônimos**, também contribuem para o volume de manifestações, mas em proporções significativamente menores. Esses insights são fundamentais para direcionar estratégias de atendimento e comunicação, garantindo que as necessidades dos principais grupos de manifestantes sejam adequadamente atendidas.
+
+### Porque algumas pessoas aparecem como "Anônimas"?
+
+A categorização de alguns manifestantes como **"Anônimo"** na base de dados da Ouvidoria da ANTT pode ser atribuída a diversos fatores relacionados ao processo de registro das manifestações. Primeiramente, é possível que alguns usuários optem por não fornecer informações pessoais durante o cadastro de suas manifestações, seja por questões de privacidade, receio de retaliação ou simplesmente por preferirem manter o anonimato ao expressar suas opiniões ou relatar problemas. Além disso, o sistema de registro pode permitir o envio de manifestações sem a obrigatoriedade de identificação, o que facilita a participação de usuários que desejam permanecer anônimos. Outra possibilidade é a ocorrência de falhas ou omissões no preenchimento dos dados, seja por parte dos usuários ou devido a limitações técnicas do sistema de registro. Essas razões combinadas explicam por que uma parcela dos manifestantes é classificada como "Anônimo" na base de dados, refletindo a diversidade de perfis e preferências dos usuários que interagem com a Ouvidoria da ANTT.
+
+Por isso é válido buscar os chamados de pessoas "Anônimas" para entender melhor o perfil dessas manifestações e identificar possíveis padrões ou necessidades específicas desse grupo de usuários.
+
+### Análise dos Assuntos mais Contatados por Manifestantes Anônimos (Nível 1)
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df_anonimo = df[df['tipo_usuario'] == 'Anônimo'].copy()
+
+df_assunto_anonimo = (
+    df_anonimo
+    .groupby('assunto_nivel_1', observed=True)
+    .size()
+    .reset_index(name='quantidade')
+    .sort_values('quantidade', ascending=False)
+)
+df_top3 = df_assunto_anonimo.head(3)
+
+plt.figure(figsize=(12, 8))
+plt.barh(df_top3['assunto_nivel_1'], df_top3['quantidade'])
+plt.gca().invert_yaxis()
+plt.title('Top 3 Assuntos mais Contatados por Manifestantes Anônimos (Nível 1)')
+plt.xlabel('Quantidade de Manifestações')
+plt.ylabel('Assunto (Nível 1)')
+plt.tight_layout()
+plt.subplots_adjust(left=0.45)
+plt.show()
+```
+
+A análise do gráfico indica que as manifestações registradas como **“Anônimas”** concentram-se majoritariamente em assuntos relacionados ao **Atendimento da Ouvidoria**, enquanto os demais temas apresentam ocorrência residual ou praticamente inexistente. Esse comportamento evidencia uma forte concentração temática, limitando a capacidade interpretativa do gráfico no nível de agregação adotado (`assunto_nivel_1`). Diante da baixa diversidade de assuntos observada, a análise no nível `assunto_nivel_1` não se mostra suficientemente informativa. Assim, torna-se metodologicamente mais adequado aprofundar a investigação por meio do **`assunto_nivel_2`**, que possibilita maior granularidade e pode revelar padrões, subtemas e demandas específicas associadas às manifestações anônimas.
+
+### Análise dos Assuntos mais Contatados por Manifestantes Anônimos (Nível 2)
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df_anonimo = df[df['tipo_usuario'] == 'Anônimo'].copy()
+
+df_assunto_anonimo = (
+    df_anonimo
+    .groupby('assunto_nivel_2', observed=True)
+    .size()
+    .reset_index(name='quantidade')
+    .sort_values('quantidade', ascending=False)
+)
+df_top3 = df_assunto_anonimo.head(3)
+
+plt.figure(figsize=(12, 8))
+plt.barh(df_top3['assunto_nivel_2'], df_top3['quantidade'])
+plt.gca().invert_yaxis()
+plt.title('Top 3 Assuntos mais Contatados por Manifestantes Anônimos (Nível 2)')
+plt.xlabel('Quantidade de Manifestações')
+plt.ylabel('Assunto (Nível 2)')
+plt.tight_layout()
+plt.subplots_adjust(left=0.45)
+plt.show()
+```
+
+A análise do gráfico, ao aprofundar a investigação para o nível **`assunto_nivel_2`**, permite compreender com maior clareza a razão pela qual determinadas manifestações são classificadas como **“Anônimas”**. Observa-se que, na realidade, essas ocorrências não correspondem a manifestações deliberadamente anônimas, mas sim a atendimentos **"Não Identificados"**, nos quais não houve possibilidade técnica ou procedimental de identificação do manifestante. Isso se evidencia pelo fato de que todas as categorias identificadas nesse nível dizem respeito a situações em que a identificação do usuário é inviável, como **“Perda da ligação/conexão (desligado/desconectado pelo usuário)”**, **“Perda da ligação (desligado pelo atendente)”** e **“Foge à competência da ANTT”**. Dessa forma, a classificação como “Anônimo” reflete limitações operacionais do atendimento, e não uma escolha explícita do usuário pelo anonimato, indicando a necessidade de uma distinção conceitual mais precisa entre manifestações anônimas e não identificadas.
+
+## Métodos de contato mais Utilizados pelos Usuários
+
+A análise dos métodos de contato mais utilizados pelos usuários para acionar a Ouvidoria da ANTT oferece insights valiosos sobre as preferências e comportamentos dos manifestantes. A visualização a seguir apresenta a distribuição dos diferentes canais de comunicação adotados ao longo do período analisado, destacando aqueles que são mais frequentemente utilizados.
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+contagem_forma_recebimento = df['forma_recebimento'].value_counts()
+
+plt.figure(figsize=(8, 5));
+contagem_forma_recebimento.plot(kind='bar', color='orchid');
+plt.title('Métodos de Contato mais Utilizados pelos Usuários');
+plt.xlabel('Método de Contato');
+plt.ylabel('Número de Manifestações');
+plt.ylim(0, max(contagem_forma_recebimento) * 1.15);
+for i, v in enumerate(contagem_forma_recebimento):
+    plt.text(
+      i,
+      v + (max(contagem_forma_recebimento) * 0.02),
+      str(v),
+      ha='center',
+      fontweight='bold'
+      );
+plt.xticks(rotation=45, ha='right');
+plt.ticklabel_format(axis='y', style='plain');
+plt.tight_layout();
+plt.show();
+```
+
+A análise do gráfico revela que o **166** (Telefone da Ouvidoria) se consolida como o principal meio de contato utilizado pelos cidadãos, concentrando a maior parte das manifestações registradas. Esse resultado indica uma **clara preferência pelo atendimento telefônico**, possivelmente associada à facilidade de acesso, à gratuidade do serviço e à **possibilidade de interação direta e imediata com um atendente**, o que pode transmitir **maior sensação de resolutividade e acolhimento ao usuário**.
+
+## Análise dos Assuntos de Nível mais Frequentes
+
+A identificação dos **assuntos mais frequentes** constitui uma etapa fundamental da análise, pois permite compreender **quais temas concentram a maior parte das manifestações** registradas na Ouvidoria da ANTT. Ao analisar os assuntos em diferentes níveis de agregação, torna-se possível identificar tanto **padrões gerais de demanda** quanto indícios de **problemas recorrentes** que impactam diretamente a experiência dos usuários. Essa abordagem fornece uma visão inicial do foco das manifestações e orienta os aprofundamentos analíticos subsequentes, direcionando a investigação para os temas que efetivamente concentram maior relevância no conjunto de dados.
+
+### Análise dos Assuntos de Nível 1 mais Frequentes
+
+Análise inicial dos `assunto_nível_1` mais frequentes permite identificar os temas predominantes nas manifestações registradas na Ouvidoria da ANTT. A visualização a seguir apresenta os **top 5 assuntos de nível 1 mais recorrentes**, oferecendo uma visão geral das principais demandas dos usuários.
+
+```{python echo=FALSE}
+contagem_assunto_nivel_2 = df['assunto_nivel_1'].value_counts().head(5)
+
+plt.figure(figsize=(12, 8));
+contagem_assunto_nivel_2.plot(kind='barh', color='red');
+plt.gca().invert_yaxis();
+plt.title('Top 5 Assuntos de Nível 1 mais Frequentes');
+plt.xlabel('Número de Manifestações');
+plt.ylabel('Assunto (Nível 2)');
+for i, v in enumerate(contagem_assunto_nivel_2):
+    plt.text(
+      v + (max(contagem_assunto_nivel_2) * 0.02),
+      i,
+      str(v),
+      va='center',
+      fontweight='bold'
+      );
+plt.subplots_adjust(left=0.45);
+plt.tight_layout();
+plt.show();
+```
+
+O gráfico evidencia uma **concentração significativa das manifestações no tema “Transporte Rodoviário de Passageiros”**, que se destaca de forma expressiva em relação aos demais `assunto_nivel_1`. Esse resultado indica que a maior parte das demandas dos usuários está diretamente relacionada aos serviços de transporte de passageiros, sugerindo elevada exposição desse setor a reclamações, solicitações ou questionamentos recorrentes. Diante desse cenário, torna-se pertinente aprofundar a análise nos níveis subsequentes de classificação associados a esse assunto, a fim de identificar com maior precisão os tipos de problemas ou demandas mais frequentes.
+
+Em contrapartida, os demais assuntos — como **Atendimento da Ouvidoria**, **Administração** e **Transporte Rodoviário de Cargas** — apresentam volumes consideravelmente menores, o que indica uma distribuição menos complexa das manifestações nesses eixos. Isso reforça o papel analítico do detalhamento hierárquico principalmente para os assuntos mais abrangentes e recorrentes, onde a decomposição em níveis inferiores se torna essencial para uma compreensão mais precisa das causas subjacentes.
+
+### Análise dos Assuntos de Nível 2 mais Frequentes
+
+Ao longo da análise, o `assunto_nivel_2` mostrou-se especialmente relevante por representar um nível intermediário de categorização: mais específico do que o `assunto_nivel_1`, porém ainda suficientemente generalista quando comparado aos níveis mais detalhados. Essa característica permite capturar padrões temáticos de forma mais precisa, sem perder a capacidade de interpretação agregada dos dados. Diante disso, torna-se pertinente identificar e analisar os **assuntos de nível 2 mais frequentes**, a fim de compreender com maior clareza as principais demandas apresentadas pelos usuários à Ouvidoria da ANTT.
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+contagem_assunto_nivel_2 = df['assunto_nivel_2'].value_counts().head(5)
+
+plt.figure(figsize=(12, 8));
+contagem_assunto_nivel_2.plot(kind='barh', color='teal');
+plt.gca().invert_yaxis();
+plt.title('Top 5 Assuntos de Nível 2 mais Frequentes');
+plt.xlabel('Número de Manifestações');
+plt.ylabel('Assunto (Nível 2)');
+for i, v in enumerate(contagem_assunto_nivel_2):
+    plt.text(
+      v + (max(contagem_assunto_nivel_2) * 0.02),
+      i,
+      str(v),
+      va='center',
+      fontweight='bold'
+      );
+plt.subplots_adjust(left=0.45);
+plt.tight_layout();
+plt.show();
+```
+
+O gráfico evidencia uma forte concentração das manifestações no `assunto_nivel_2` **“Regular”**, que se destaca de forma expressiva em relação às demais categorias. Esse resultado indica que grande parte das demandas apresenta caráter genérico, o que limita a compreensão detalhada dos motivos específicos dos contatos nesse nível de análise. Por essa razão, torna-se pertinente aprofundar a investigação no `assunto_nivel_3` associado às ocorrências classificadas como **“Regular”**, a fim de identificar com maior precisão os temas subjacentes a essas manifestações. Em contrapartida, observa-se que a maioria das demais categorias tem seu atendimento encerrado já no `assunto_nivel_2`, não demandando maior detalhamento, o que reforça o papel do nível 3 principalmente como instrumento de refinamento das classificações mais amplas.
+
+### Análise dos Assuntos de Nível 3 mais Frequentes dentro do Assunto "Regular"
+
+Aprofundando a análise no `assunto_nivel_3` das manifestações classificadas como **“Regular”**, torna-se possível identificar os temas específicos que predominam dentro dessa categoria ampla. A visualização a seguir apresenta o assunto de nível 3 mais frequente entre as manifestações enquadradas como “Regular”, oferecendo insights sobre as demandas específicas dos usuários nesse contexto.
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df_regular = df[df['assunto_nivel_2'] == 'REGULAR'].copy()
+df_regular = df_regular[df_regular['assunto_nivel_3'] != 'NÃO DETALHADO']
+
+contagem_assunto_nivel_3 = (df_regular['assunto_nivel_3'].value_counts().head(1))
+
+plt.figure(figsize=(8, 5))
+plt.bar(contagem_assunto_nivel_3.index,contagem_assunto_nivel_3.values)
+plt.title('Assunto de Nível 3 mais Frequentes dentro do Assunto "Regular"')
+plt.xlabel('Número de Manifestações')
+plt.ylabel('Assunto (Nível 3)')
+plt.subplots_adjust(left=0.45)
+plt.tight_layout()
+plt.show()
+```
+
+A análise do gráfico evidencia que, dentro do `assunto_nivel_2` **“Regular”**, praticamente todas as manifestações são classificadas no `assunto_nivel_3` como **“Longa Distância”**, concentrando mais de **95%** dos registros. Em razão dessa elevada concentração, optou-se por apresentar apenas essa categoria, uma vez que a inclusão de outras não agregaria valor analítico relevante. Esse resultado indica que o nível 3, nesse contexto, não oferece granularidade suficiente para compreender as particularidades das demandas. Diante disso, torna-se necessário avançar para a análise do **assunto_nivel_4**, que pode fornecer maior detalhamento e permitir uma interpretação mais precisa dos motivos subjacentes às manifestações.
+
+### Análise dos Assuntos de Nível 4 mais Frequentes dentro do Assunto "Regular" e "Longa Distância""
+
+Aprofundando ainda mais a análise, o `assunto_nivel_4` das manifestações classificadas como **“Regular”** e **“Longa Distância”** oferece uma visão detalhada dos temas específicos que predominam dentro dessa subcategoria. A visualização a seguir apresenta os **assuntos de nível 4** mais frequentes entre essas manifestações, permitindo uma compreensão mais precisa das demandas dos usuários nesse contexto.
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df_filtrado = df[
+    (df['assunto_nivel_2'] == 'REGULAR') &
+    (df['assunto_nivel_3'] == 'LONGA DISTÂNCIA')
+].copy()
+
+df_filtrado = df_filtrado[df_filtrado['assunto_nivel_4'] != 'NÃO DETALHADO']
+
+contagem_assunto_nivel_4 = (df_filtrado['assunto_nivel_4'].value_counts().head(5))
+
+plt.figure(figsize=(12, 8))
+plt.barh(contagem_assunto_nivel_4.index,contagem_assunto_nivel_4.values, color='coral')
+plt.gca().invert_yaxis()
+plt.title('Análise dos Assuntos de Nível 4 mais Frequentes\n''dentro do Assunto "Regular" e "Longa Distância"')
+plt.xlabel('Número de Manifestações')
+plt.ylabel('Assunto (Nível 4)')
+max_valor = contagem_assunto_nivel_4.max()
+for i, v in enumerate(contagem_assunto_nivel_4):
+    plt.text(
+      v + (max(contagem_assunto_nivel_4) * 0.02),
+      i,
+      str(v),
+      va='center',
+      fontweight='bold'
+      );
+plt.subplots_adjust(left=0.45);
+plt.tight_layout();
+plt.show();
+```
+
+A análise do gráfico evidencia uma **concentração extremamente elevada** das manifestações no **assunto de nível 4 “Bilhete de Passagem (Longa Distância)”**, que supera de forma expressiva todas as demais categorias. Esse resultado indica que, mesmo após sucessivos refinamentos nos níveis de classificação, a maior parte das demandas relacionadas ao tema **“Regular”** e **“Longa Distância”** permanece fortemente associada a questões envolvendo a comercialização e o acesso a passagens.
+
+As demais categorias — como **Benefício do Idoso**, **Itinerário/Linha/Frequência/Horário**, **AtrasoRaso** e **Avaria Mecânica** — apresentam volumes significativamente inferiores, reforçando o caráter predominante do tema relacionado ao bilhete de passagem. Essa assimetria sugere que o nível 4 ainda agrega diferentes situações sob uma mesma categoria ampla, o que limita a compreensão detalhada das demandas dos usuários.
+
+Diante desse cenário, torna-se metodologicamente pertinente realizar a **última etapa de aprofundamento** no `assunto_nivel_5`, especificamente para as ocorrências classificadas como **“Bilhete de Passagem (Longa Distância)”**, com o objetivo de identificar subtemas mais específicos e compreender com maior precisão os principais motivos que levam os usuários a acionar a Ouvidoria da ANTT nesse contexto.
+
+### Análise dos Assuntos de Nível 5 mais Frequentes dentro do Assunto "Regular", "Longa Distância" e "Bilhete de Passagem (Longa Distância)"
+
+Aprofundando a análise para o `assunto_nivel_5` das manifestações classificadas como **“Regular”**, **“Longa Distância”** e **“Bilhete de Passagem (Longa Distância)”**, torna-se possível identificar os temas específicos que predominam dentro dessa subcategoria. A visualização a seguir apresenta os assuntos de nível 5 mais frequentes entre essas manifestações, oferecendo insights sobre as demandas específicas dos usuários nesse contexto.
+
+```{python echo=FALSE}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df_bilhete = df[
+    (df['assunto_nivel_2'] == 'REGULAR') &
+    (df['assunto_nivel_3'] == 'LONGA DISTÂNCIA') &
+    (df['assunto_nivel_4'] == 'BILHETE DE PASSAGEM (LONGA DISTÂNCIA)')
+].copy()
+
+df_bilhete = df_bilhete[df_bilhete['assunto_nivel_5'] != 'NÃO DETALHADO']
+
+contagem_assunto_nivel_5 = (df_bilhete['assunto_nivel_5'].value_counts().head(3))
+plt.figure(figsize=(12, 8))
+plt.barh(contagem_assunto_nivel_5.index,contagem_assunto_nivel_5.values, color='slateblue')
+plt.gca().invert_yaxis()
+plt.title('Análise dos Assuntos de Nível 5 mais Frequentes\n''dentro do Assunto "Regular", "Longa Distância" e "Bilhete de Passagem (Longa Distância)"')
+plt.xlabel('Número de Manifestações')
+plt.ylabel('Assunto (Nível 5)')
+max_valor = contagem_assunto_nivel_5.max()
+for i, v in enumerate(contagem_assunto_nivel_5):
+    plt.text(
+      v + (max(contagem_assunto_nivel_5) * 0.02),
+      i,
+      str(v),
+      va='center',
+      fontweight='bold'
+      );
+plt.subplots_adjust(left=0.45);
+plt.tight_layout();
+plt.show();
+```
+
+A análise hierárquica dos **assuntos de atendimento**, do **nível 1 ao nível 5**, evidencia um padrão claro de **concentração progressiva das manifestações em poucos temas centrais**, à medida que se aprofunda o nível de detalhamento. Nos níveis mais agregados, observa-se inicialmente uma predominância de classificações amplas, como **“Regular”**, que, embora representem grande volume de registros, oferecem limitada capacidade explicativa sobre as reais motivações dos contatos.
+
+Com o refinamento sucessivo para os níveis 3 e 4, torna-se evidente que a maior parte dessas manifestações está associada ao contexto de **transporte rodoviário de passageiros em longa distância**, especialmente a questões relacionadas ao **bilhete de passagem**. Esse resultado demonstra que os níveis intermediários ainda concentram diferentes demandas sob categorias genéricas, o que reforça a necessidade de aprofundamento analítico.
+
+O exame final no **`assunto_nivel_5`** revela, de forma inequívoca, que a esmagadora maioria das manifestações refere-se ao **Benefício do Deficiente/Passe Livre em viagens de longa distância**, superando amplamente quaisquer outros subtemas, como benefício do jovem estudante ou devolução de valores pagos. Essa concentração extrema indica que o principal foco de insatisfação, dúvida ou demanda dos usuários está relacionado ao acesso, à utilização ou às condições desse benefício específico.
+
+De maneira geral, os resultados demonstram que apenas a análise nos níveis mais detalhados permite compreender efetivamente as demandas da sociedade, uma vez que os níveis superiores tendem a mascarar problemas específicos ao agrupar temas distintos em categorias genéricas. Assim, a abordagem hierárquica adotada mostrou-se fundamental para revelar o verdadeiro núcleo das manifestações encaminhadas à **Ouvidoria da ANTT**, fornecendo subsídios relevantes para o aprimoramento de políticas públicas, processos de atendimento e estratégias de comunicação institucional.
+
+## Análise da Sazonalidade por Tipos de Mensagem
+
+A análise da **sazonalidade** dos principais tipos de mensagem ao longo do período de janeiro de 2022 a dezembro de 2023 revela padrões distintos que podem estar relacionados a **fatores sazonais**, **eventos específicos** ou **campanhas de comunicação**. A visualização a seguir apresenta a **evolução mensal** dos **três tipos de mensagem** mais frequentes, permitindo identificar tendências e variações ao longo do tempo.
+
+```{python echo=FALSE}
+import pandas as pd
+import plotly.express as px
+
+df_sazonal = df[['tipo_mensagem', 'data_cadastro_protocolo']].copy()
+
+df_sazonal['data_cadastro_protocolo'] = pd.to_datetime(df_sazonal['data_cadastro_protocolo'])
+
+df_sazonal['mes_ano'] = df_sazonal['data_cadastro_protocolo'].dt.to_period('M').dt.to_timestamp()
+
+top_tipos = df_sazonal['tipo_mensagem'].value_counts().head(3).index.tolist()
+
+df_top = df_sazonal[df_sazonal['tipo_mensagem'].isin(top_tipos)].copy()
+
+df_top['tipo_mensagem'] = pd.Categorical(df_top['tipo_mensagem'], categories=top_tipos, ordered=True)
+
+df_contagem = (
+    df_top
+    .groupby(['mes_ano', 'tipo_mensagem'], observed=True)
+    .size()
+    .reset_index(name='quantidade')
+)
+
+fig3 = px.line(
+    df_contagem,
+    x='mes_ano',
+    y='quantidade',
+    color='tipo_mensagem',
+    markers=True,
+    title='Sazonalidade dos 3 Principais Tipos de Mensagem (Jan 2022 - Dez 2023)',
+    labels={'mes_ano': 'Mês/Ano', 'quantidade': 'Quantidade', 'tipo_mensagem': 'Tipo de Mensagem'}
+)
+fig3.show()
+```
+
+Observa-se que o volume de **Pedidos de Informação** mantém uma tendência relativamente desgovernada, com picos ocasionais que podem estar relacionados a eventos específicos ou campanhas de comunicação. Em contraste, as **Reclamações** apresentam uma tendência ascendente, especialmente a partir de **maio** de **2023**, culminando em um aumento significativo em meses posteriores. Esse comportamento sugere uma crescente insatisfação dos usuários ou uma maior conscientização sobre os canais de reclamação disponíveis. As **Outras Solicitações** também exibem variações, embora em menor escala, indicando que esse tipo de manifestação é menos sensível a fatores sazonais. Esses insights são cruciais para a Ouvidoria da ANTT, pois permitem identificar períodos de maior demanda e ajustar estratégias de atendimento e comunicação com os usuários.
+
+## Análise dos Recontatos por Protocolo
+
+A análise dos recontatos por protocolo visa **compreender a frequência com que os usuários retornam** à **Ouvidoria da ANTT** para registrar **múltiplas manifestações relacionadas a um mesmo protocolo**. Essa métrica é fundamental para avaliar a **eficácia do atendimento inicial** e identificar possíveis lacunas no processo de **resolução de demandas**. A visualização a seguir apresenta a distribuição dos recontatos ao longo do período analisado, destacando o número de protocolos que geraram múltiplos registros.
+
+```{python echo=FALSE}
+import pandas as pd
+import plotly.express as px
+
+df_recontatos = df[['protocolo', 'recontato', 'data_cadastro_protocolo']].copy()
+
+df_recontatos['data_cadastro_protocolo'] = pd.to_datetime(df_recontatos['data_cadastro_protocolo'])
+
+df_recontatos['mes_ano'] = df_recontatos['data_cadastro_protocolo'].dt.to_period('M').dt.to_timestamp()
+
+df_recontatos = df_recontatos[df_recontatos['recontato']].copy()
+
+df_contagem_recontatos = df_recontatos.groupby('mes_ano')['protocolo'].nunique().reset_index(name='quantidade_recontatos')
+
+fig4 = px.line(
+    df_contagem_recontatos,
+    x='mes_ano',
+    y='quantidade_recontatos',
+    markers=True,
+    title='Sazonalidade dos Recontatos por Protocolo (Jan 2022 - Dez 2023)',
+    labels={'mes_ano': 'Mês/Ano', 'quantidade_recontatos': 'Número de Recontatos'}
+)
+fig4.show()
+```
+
+É possível observar que o número de recontatos por protocolo **diminuiu** signitivamente no **segundo semestre** de **2022**, **mantendo-se** em **níveis mais baixos** ao longo de **2023**. Esse comportamento pode indicar uma **melhoria** na resolução das demandas iniciais ou uma **maior satisfação dos usuários** com o atendimento prestado pela **Ouvidoria**. No entanto, é importante considerar que outros fatores, como mudanças nos **processos internos** ou na comunicação com os usuários, **também podem influenciar essa métrica**. A análise contínua dos recontatos é essencial para **identificar tendências** e ajustar estratégias de atendimento, visando sempre a **melhoria da experiência do usuário** e a eficácia na resolução das manifestações registradas.
+
+## Conclusão da Análise Exploratória com Visão de Negócio
+
+A análise exploratória das manifestações da Ouvidoria da ANTT, referentes aos anos de 2022 e 2023, evidenciou que, embora o volume total de registros tenha permanecido relativamente estável, houve uma mudança significativa no **perfil das demandas**, especialmente no crescimento expressivo das **reclamações** em 2023.
+
+A decomposição hierárquica dos assuntos demonstrou que categorias amplas, como “Regular”, concentram grande volume de registros, mas **mascaram problemas específicos**, os quais só se tornam visíveis nos níveis mais detalhados. Ao aprofundar a análise até o `assunto_nivel_5`, identificou-se que a maior parte das manifestações está fortemente concentrada em questões relacionadas ao **Benefício do Deficiente/Passe Livre em viagens de longa distância**, revelando um ponto crítico de atenção para a política pública regulada pela Agência.
+
+Adicionalmente, a análise dos registros classificados como “Anônimo” evidenciou que muitos deles correspondem, na prática, a atendimentos **não identificados por limitações operacionais**, e não a uma escolha deliberada do usuário pelo anonimato, indicando uma oportunidade de aprimoramento conceitual e operacional no processo de registro das manifestações.
+
+Esses resultados reforçam a importância de análises orientadas por **granularidade temática**, bem como da utilização estratégica dos dados da Ouvidoria como instrumento de apoio à **tomada de decisão institucional**, ao aprimoramento dos canais de atendimento e ao direcionamento de ações regulatórias e comunicacionais da ANTT.
+
+------------------------------------------------------------------------
+
+# Machine Learning para Apoio à Triagem
+
+Nesta seção, é desenvolvido um modelo de **Machine Learning** com o objetivo de **auxiliar a triagem automática das manifestações** recebidas pela Ouvidoria da ANTT. A proposta consiste em construir um classificador capaz de prever o `assunto_nivel_1` a partir de variáveis categóricas, numéricas e binárias disponíveis na base de dados.
+
+Para essa finalidade, são explorados dois algoritmos com características distintas: **Regressão Logística**, que atua como um modelo linear e interpretável, e **Random Forest**, um método baseado em árvores de decisão que captura relações não lineares e interações complexas entre as variáveis. A utilização de ambos permite comparar desempenho, robustez e adequação ao problema de triagem.
+
+## Ajuste de Variáveis e Preparação dos Dados
+
+Antes do treinamento dos modelos, são aplicados critérios de preparação dos dados visando melhorar a qualidade do aprendizado e a confiabilidade dos resultados.
+
+Inicialmente, é realizada a **remoção de classes com baixa frequência** na variável alvo `assunto_nivel_1`. Classes com menos de 50 ocorrências são excluídas da base, pois tendem a gerar modelos instáveis e com baixo poder preditivo, além de dificultar a avaliação adequada do desempenho. Esse procedimento garante que todas as classes utilizadas no treinamento possuam representatividade mínima.
+
+Em seguida, é feita uma **amostragem estratificada de 5%** da base resultante. A estratificação assegura que a distribuição das classes seja preservada na amostra, evitando distorções que poderiam comprometer o treinamento e a comparação entre modelos. Essa etapa também contribui para a redução do custo computacional, tornando o processo mais eficiente sem perder a estrutura essencial dos dados.
+
+Por fim, a base amostrada é utilizada nas etapas subsequentes de separação entre variáveis independentes e dependente, pré-processamento e divisão entre conjuntos de treino e teste, sempre mantendo a proporção das classes. Dessa forma, estabelece-se um fluxo consistente e controlado para o desenvolvimento e avaliação dos modelos de Machine Learning aplicados à triagem das manifestações.
+
+```{python echo=FALSE}
+from sklearn.model_selection import train_test_split
+
+class_counts = df['assunto_nivel_1'].value_counts()
+valid_classes = class_counts[class_counts >= 50].index
+df_model = df[df['assunto_nivel_1'].isin(valid_classes)].copy()
+
+print("Classes removidas:", set(class_counts.index) - set(valid_classes))
+print("Número de classes finais:", df_model['assunto_nivel_1'].nunique())
+```
+
+```{python echo=FALSE}
+df_sample, _ = train_test_split(
+    df_model,
+    train_size=0.05,
+    stratify=df_model['assunto_nivel_1'],
+    random_state=42
+)
+
+df_sample = df_sample.copy()
+
+print("Base original:", df.shape)
+print("Base amostrada (5%):", df_sample.shape)
+```
+
+## Separação entre Variáveis Independentes e Dependente
+
+Nesta etapa, é realizada a definição clara entre as **variáveis independentes (features)** e a **variável dependente (target)**, o que é fundamental para a correta formulação do problema de aprendizado supervisionado.
+
+A variável dependente escolhida é `assunto_nivel_1`, que representa o rótulo a ser previsto pelos modelos. Essa variável concentra a informação de interesse principal da análise, sendo utilizada como saída (`y`) no processo de treinamento e avaliação.
+
+As variáveis independentes são organizadas de acordo com sua natureza:
+
+-   **Variáveis categóricas (`features_cat`)**: representam atributos qualitativos, como o tipo de usuário, a forma de recebimento da manifestação e características organizacionais ou temporais (mês). Essas variáveis não possuem uma escala numérica intrínseca e, portanto, exigem técnicas específicas de codificação no pré-processamento.
+
+-   **Variáveis numéricas (`features_num`)**: correspondem a atributos quantitativos, como o ano do registro e a quantidade de contatos associados ao protocolo, permitindo operações matemáticas diretas.
+
+-   **Variáveis binárias (`features_bin`)**: assumem apenas dois estados possíveis (por exemplo, 0 ou 1), como a variável `recontato`, indicando a ocorrência ou não de um novo contato relacionado à manifestação.
+
+Após a definição das listas de variáveis, é realizada a separação efetiva dos dados, em que o conjunto `X` reúne todas as variáveis independentes (categóricas, numéricas e binárias), enquanto o vetor `y` contém exclusivamente a variável dependente. Essa estruturação garante organização, clareza e compatibilidade com os pipelines de pré-processamento e modelagem adotados nas etapas subsequentes.
+
+```{python}
+target = 'assunto_nivel_1'
+
+features_cat = [
+    'tipo_usuario',
+    'forma_recebimento',
+    'tipo_mensagem',
+    'estrutura_organizacional',
+    'mes'
+]
+
+features_num = [
+    'ano',
+    'qtd_contatos_protocolo'
+]
+
+features_bin = [
+    'recontato'
+]
+
+X = df_sample[features_cat + features_num + features_bin]
+y = df_sample[target]
+```
+
+## Divisão entre Conjuntos de Treino e Teste
+
+A divisão do conjunto de dados em **treino** e **teste** é uma etapa essencial no fluxo de modelagem, pois permite avaliar o desempenho do modelo em dados não vistos durante o treinamento, fornecendo uma estimativa mais realista de sua capacidade de generalização.
+
+No código apresentado, a função `train_test_split` é utilizada para separar as variáveis explicativas (`X`) e a variável alvo (`y`) em dois subconjuntos distintos:
+
+-   **Conjunto de treino (`X_train`, `y_train`)**: utilizado para ajustar os parâmetros do modelo.
+-   **Conjunto de teste (`X_test`, `y_test`)**: reservado exclusivamente para a avaliação final do modelo.
+
+O parâmetro `test_size=0.2` define que **20% dos dados** serão destinados ao conjunto de teste, enquanto os **80% restantes** compõem o conjunto de treino. Essa proporção é amplamente adotada por equilibrar a quantidade de dados disponíveis para aprendizado e avaliação.
+
+O uso de `stratify=y` garante que a distribuição das classes da variável alvo seja preservada em ambos os conjuntos. Essa estratificação é especialmente importante em problemas de classificação, principalmente quando há desbalanceamento entre as classes, evitando vieses na avaliação do modelo.
+
+Por fim, o parâmetro `random_state=42` fixa a semente de aleatoriedade do processo, assegurando **reprodutibilidade** dos resultados. Dessa forma, a mesma divisão entre treino e teste será obtida sempre que o código for executado, facilitando comparações entre diferentes modelos e experimentos.
+
+```{python}
+from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.2,
+    stratify=y,
+    random_state=42
+)
+```
+
+## Pré-processamento dos Dados
+
+Antes do treinamento dos modelos de aprendizado de máquina, é fundamental realizar o pré-processamento dos dados, garantindo que as variáveis estejam em um formato adequado e comparável. No código apresentado, esse processo é estruturado por meio de um **pipeline de pré-processamento** utilizando o `ColumnTransformer`, que permite aplicar transformações distintas a diferentes grupos de variáveis de forma organizada e reproduzível.
+
+### Tratamento das Variáveis Categóricas
+
+As variáveis categóricas (`features_cat`) são transformadas por meio do **One-Hot Encoding**, técnica que converte categorias em colunas binárias. Cada coluna representa a presença ou ausência de uma determinada categoria, evitando a introdução de relações ordinais inexistentes entre os valores categóricos.
+
+O parâmetro `handle_unknown='ignore'` garante que categorias não vistas durante o treinamento não causem erros na fase de predição, sendo simplesmente ignoradas. Já o parâmetro `min_frequency=100` agrupa categorias raras (com frequência inferior a 100 ocorrências) em uma única categoria, reduzindo a dimensionalidade do conjunto de dados e mitigando problemas relacionados à alta esparsidade.
+
+### Tratamento das Variáveis Numéricas e Binárias
+
+As variáveis numéricas e binárias (`features_num + features_bin`) são padronizadas utilizando o **StandardScaler**. Essa técnica transforma os dados para que tenham média zero e desvio padrão igual a um, o que é especialmente importante para modelos sensíveis à escala das variáveis, como regressão logística e redes neurais.
+
+A padronização garante que todas as variáveis contribuam de maneira equilibrada para o aprendizado do modelo, evitando que atributos com maiores magnitudes dominem o processo de otimização.
+
+### Integração no Pipeline
+
+O `ColumnTransformer` integra todas essas transformações em um único pipeline, assegurando que o mesmo pré-processamento seja aplicado de forma consistente tanto nos dados de treino quanto nos dados de teste. Essa abordagem reduz riscos de *data leakage*, melhora a reprodutibilidade dos experimentos e facilita a integração com os modelos de machine learning do `scikit-learn`.
+
+```{python}
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        (
+            'cat',
+            OneHotEncoder(
+                handle_unknown='ignore',
+                min_frequency=100
+            ),
+            features_cat
+        ),
+        (
+            'num',
+            Pipeline(
+                steps=[
+                    ('scaler', StandardScaler())
+                ]
+            ),
+            features_num + features_bin
+        )
+    ]
+)
+```
+
+## Treinamento dos Modelos
+
+Nesta etapa, são treinados os dois modelos de **Machine Learning** definidos para o apoio à triagem automática das manifestações: **Regressão Logística** e **Random Forest**. Ambos são integrados a um **pipeline** que combina o pré-processamento dos dados e o algoritmo de classificação em um único fluxo, garantindo consistência e evitando vazamento de informação (*data leakage*).
+
+### Regressão Logística
+
+A **Regressão Logística** é configurada como um classificador multiclasse, adequada para problemas de classificação supervisionada com múltiplas categorias na variável alvo. O parâmetro `max_iter=1000` define um número elevado de iterações para assegurar a convergência do algoritmo, especialmente em conjuntos de dados com grande número de variáveis geradas pelo One-Hot Encoding.
+
+O uso de `class_weight='balanced'` ajusta automaticamente os pesos das classes de forma inversamente proporcional à sua frequência, mitigando os efeitos do desbalanceamento entre as categorias do `assunto_nivel_1`. O parâmetro `random_state=42` garante a reprodutibilidade dos resultados.
+
+A Regressão Logística é então inserida em um `Pipeline` juntamente com o pré-processador, assegurando que todas as transformações sejam aprendidas exclusivamente a partir do conjunto de treino e aplicadas de forma idêntica durante o treinamento do modelo.
+
+```{python}
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+
+logreg = LogisticRegression(
+    max_iter=1000,
+    class_weight='balanced',
+    random_state=42
+)
+
+pipeline_logreg = Pipeline(
+    steps=[
+        ('preprocess', preprocessor),
+        ('classifier', logreg)
+    ]
+)
+
+pipeline_logreg.fit(X_train, y_train)
+```
+
+### Random Forest
+
+O segundo modelo treinado é o **Random Forest**, um algoritmo de ensemble baseado em múltiplas árvores de decisão, capaz de capturar relações não lineares e interações complexas entre as variáveis.
+
+O parâmetro `n_estimators=100` define o número de árvores na floresta, enquanto `max_depth=20` limita a profundidade máxima de cada árvore, ajudando a controlar o sobreajuste (*overfitting*). O parâmetro `min_samples_leaf=50` impõe um número mínimo de observações em cada folha, tornando o modelo mais robusto e menos sensível a ruídos nos dados.
+
+Assim como na Regressão Logística, o uso de `class_weight='balanced'` contribui para lidar com o desbalanceamento das classes, e `random_state=42` assegura a reprodutibilidade.
+
+O Random Forest também é encapsulado em um `Pipeline` com o mesmo pré-processador, garantindo coerência metodológica e possibilitando uma comparação justa de desempenho entre os dois modelos treinados.
+
+```{python}
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+
+rf = RandomForestClassifier(
+    n_estimators=100,
+    max_depth=20,
+    min_samples_leaf=50,
+    class_weight='balanced',
+    random_state=42
+)
+
+pipeline_rf = Pipeline(
+    steps=[
+        ('preprocess', preprocessor),
+        ('classifier', rf)
+    ]
+)
+
+pipeline_rf.fit(X_train, y_train)
+```
+
+## Avaliação dos Modelos
+
+A avaliação dos modelos é realizada a partir das previsões geradas sobre o **conjunto de teste**, que contém dados não utilizados no treinamento. Para cada classificador (Regressão Logística e Random Forest), são calculadas métricas quantitativas e visualizações que permitem analisar o desempenho geral e o comportamento do modelo em cada classe do `assunto_nivel_1`.
+
+O principal instrumento de avaliação utilizado é o **relatório de classificação**, que apresenta, para cada classe, as métricas **precision**, **recall**, **f1-score** e **support**, além de médias agregadas. Essas métricas são fundamentais para compreender não apenas a acurácia global, mas também como o modelo se comporta diante de diferentes tipos de erro.
+
+### Precision (Precisão)
+
+A **precision** mede a proporção de previsões corretas entre todas as previsões realizadas para uma determinada classe. Em outras palavras, indica o quão confiáveis são as previsões positivas feitas pelo modelo para aquela classe.
+
+$$\text{Precision} = \frac{\text{Verdadeiros Positivos (VP)}}{\text{Verdadeiros Positivos (VP)} + \text{Falsos Positivos (FP)}}$$
+
+Um valor alto de precision significa que, quando o modelo prevê uma determinada categoria de `assunto_nivel_1`, essa previsão tende a estar correta. Essa métrica é especialmente importante em cenários em que **classificações incorretas geram alto custo**, como o encaminhamento equivocado de uma manifestação para o setor errado.
+
+### Recall (Revocação ou Sensibilidade)
+
+O **recall** mede a capacidade do modelo de identificar corretamente todas as ocorrências reais de uma determinada classe. Ele indica qual proporção dos exemplos pertencentes à classe foi efetivamente reconhecida pelo modelo.
+
+$$\text{Recall} = \frac{\text{Verdadeiros Positivos (VP)}}{\text{Verdadeiros Positivos (VP)} + \text{Falsos Negativos (FN)}}$$
+
+Um recall elevado indica que o modelo consegue capturar a maior parte das manifestações daquela classe, reduzindo a quantidade de casos que deixam de ser identificados corretamente. No contexto da triagem da Ouvidoria, isso é relevante para evitar que manifestações importantes passem despercebidas ou sejam classificadas de forma genérica.
+
+### F1-score
+
+O **f1-score** é a média harmônica entre precision e recall, oferecendo uma métrica única que equilibra ambas. Ele é particularmente útil quando há **desbalanceamento entre as classes**, pois penaliza modelos que apresentam bom desempenho em apenas uma das duas métricas.
+
+$$\text{F1-score} = 2 \times \frac{\text{Precision} \times \text{Recall}}{\text{Precision} + \text{Recall}}$$
+
+Valores elevados de f1-score indicam que o modelo consegue manter um bom equilíbrio entre prever corretamente uma classe e identificar a maior parte de suas ocorrências reais.
+
+### Support (Suporte)
+
+O **support** corresponde ao número de observações reais de cada classe presentes no conjunto de teste. Essa métrica não avalia diretamente o desempenho do modelo, mas fornece um **contexto essencial** para a interpretação das demais métricas.
+
+Classes com suporte muito baixo tendem a apresentar métricas mais instáveis, enquanto classes com maior suporte fornecem estimativas mais confiáveis de precision, recall e f1-score. Por isso, o support ajuda a compreender o peso relativo de cada classe na avaliação geral do modelo.
+
+### Matriz de Confusão
+
+A **matriz de confusão** é uma representação tabular que permite analisar, de forma detalhada, os **acertos e erros de classificação** do modelo. Nessa matriz, as **linhas representam as classes reais** e as **colunas representam as classes preditas** pelo modelo. Cada célula indica a quantidade de observações classificadas em uma determinada combinação de classe real e classe prevista.
+
+A **diagonal principal** da matriz de confusão concentra os **acertos do modelo**, ou seja, os casos em que a classe predita coincide com a classe real. Valores elevados ao longo dessa diagonal indicam que o modelo apresenta bom desempenho na identificação correta das classes do `assunto_nivel_1`.
+
+Por outro lado, os valores **fora da diagonal principal** representam os **erros de classificação**. Esses erros mostram para quais classes as manifestações estão sendo incorretamente atribuídas, permitindo identificar padrões de confusão entre categorias específicas. Esse tipo de análise é especialmente relevante no contexto da triagem automática, pois evidencia quais assuntos tendem a ser confundidos entre si e podem demandar ajustes no modelo, inclusão de novas variáveis ou refinamento das classes.
+
+Assim, a matriz de confusão complementa as métricas numéricas ao fornecer uma visão qualitativa do comportamento do modelo, facilitando a interpretação dos resultados e a identificação de oportunidades de melhoria.
+
+### Acurácia Geral
+
+A **acurácia geral** mede a proporção total de previsões corretas realizadas pelo modelo em relação ao número total de observações avaliadas. Em termos simples, ela indica **quantas manifestações foram corretamente classificadas**, independentemente da classe.
+
+$$\text{Acurácia} = \frac{\text{Número de Previsões Corretas}}{\text{Número Total de Observações}}$$
+
+Essa métrica é calculada a partir da **soma dos valores da diagonal principal da matriz de confusão**, que representa os acertos do modelo, dividida pelo total de registros no conjunto de teste. Portanto, existe uma relação direta entre a acurácia e a concentração de valores elevados na diagonal principal.
+
+Embora a acurácia forneça uma visão geral do desempenho do classificador, sua interpretação deve ser feita com cautela em problemas **multiclasse e com possível desbalanceamento**, como o da triagem das manifestações da Ouvidoria. Nesses casos, um valor elevado de acurácia pode mascarar desempenhos fracos em classes menos frequentes.
+
+Por esse motivo, a acurácia geral deve ser analisada em conjunto com a matriz de confusão e métricas como precision, recall e f1-score, garantindo uma avaliação mais robusta e alinhada ao objetivo operacional do modelo.
+
+### Considerações Gerais
+
+A análise conjunta dessas métricas permite uma avaliação mais completa do desempenho dos modelos do que a acurácia isoladamente. Em problemas de classificação multiclasse e potencialmente desbalanceados, como a triagem de manifestações da Ouvidoria, compreender os trade-offs entre precision e recall é fundamental para escolher o modelo mais adequado ao objetivo operacional da aplicação.
+
+```{python echo=FALSE}
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+import matplotlib.pyplot as plt
+import numpy as np
+
+y_pred_logreg = pipeline_logreg.predict(X_test)
+cm = confusion_matrix(y_test, y_pred_logreg)
+
+plt.figure(figsize=(8, 6));
+plt.imshow(cm, cmap='viridis');
+plt.title("Matriz de Confusão – Regressão Logística (5% da Amostra)");
+plt.xlabel("Classe Predita");
+plt.ylabel("Classe Real");
+plt.colorbar();
+
+for i in range(cm.shape[0]):
+    for j in range(cm.shape[1]):
+        if cm[i, j] > 0:
+            plt.text(j, i, cm[i, j], ha="center", va="center", fontsize=8);
+
+plt.tight_layout();
+plt.show();
+
+print("Relatório de Classificação – Regressão Logística (5% da Amostra)")
+print(classification_report(y_test, y_pred_logreg))
+print(f"Acurácia – Regressão Logística (5% da Amostra): {accuracy_score(y_test, y_pred_logreg):.4f}")
+```
+
+```{python echo=FALSE}
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+import matplotlib.pyplot as plt
+import numpy as np
+
+y_pred_rf = pipeline_rf.predict(X_test)
+cm = confusion_matrix(y_test, y_pred_rf)
+
+plt.figure(figsize=(8, 6));
+plt.imshow(cm, cmap='viridis');
+plt.title("Matriz de Confusão – Random Forest (5% da Amostra)");
+plt.xlabel("Classe Predita");
+plt.ylabel("Classe Real");
+plt.colorbar();
+for i in range(cm.shape[0]):
+    for j in range(cm.shape[1]):
+        if cm[i, j] > 0:
+            plt.text(j, i, cm[i, j], ha="center", va="center", fontsize=8);
+plt.tight_layout();
+plt.show();
+
+print("Relatório de Classificação – Random Forest (5% da Amostra)")
+print(classification_report(y_test, y_pred_rf))
+print(f"Acurácia - Random Forest (5% da Amostra) {accuracy_score(y_test, y_pred_rf):.4f}\n")
+```
+
+## Conclusão Comparativa – Regressão Logística vs Random Forest (5% da Amostra)
+
+### Visão geral do desempenho
+
+Os dois modelos testados — **Regressão Logística** e **Random Forest** — apresentaram **resultados gerais muito parecidos**, com uma acurácia próxima de **83%**. Isso significa que, de forma geral, ambos conseguem classificar corretamente cerca de **8 em cada 10 manifestações** recebidas pela Ouvidoria.
+
+- **Regressão Logística**: acurácia ≈ **82,6%**
+- **Random Forest**: acurácia ≈ **82,9%**
+
+É importante destacar que **acurácia mede apenas o total de acertos**, sem indicar *como* esses acertos estão distribuídos entre os diferentes tipos de assunto. Por isso, apesar dos números semelhantes, o comportamento dos modelos é bastante diferente quando analisamos cada categoria separadamente.
+
+### Desempenho nos assuntos mais frequentes
+
+Nos assuntos que concentram a maior parte das manifestações — como:
+
+- *Transporte Rodoviário de Passageiros*
+- *Atendimento da Ouvidoria*
+- *Administração*
+- *Transporte Rodoviário de Cargas*
+
+os dois modelos apresentaram **excelente desempenho**. Em termos simples, isso significa que:
+
+- Quando o modelo aponta um desses assuntos, **ele quase sempre está correto**;
+- A maioria das manifestações desses temas é corretamente identificada;
+- Os erros são relativamente poucos e previsíveis.
+
+Na prática, isso indica que **ambos os modelos são confiáveis para a maior parte do volume de trabalho da Ouvidoria**, onde se concentram os temas mais recorrentes.
+
+### Diferença principal: assuntos menos frequentes
+
+A maior diferença entre os modelos aparece nos **assuntos raros**, ou seja, aqueles que ocorrem poucas vezes na base de dados.
+
+#### Regressão Logística
+
+- Age de forma **mais cautelosa**;
+- Só classifica um assunto raro quando há maior certeza;
+- Comete menos erros por “excesso de confiança”;
+- Pode deixar de identificar alguns casos raros, mas evita classificações incorretas em grande escala.
+
+#### Random Forest
+
+- Tenta **identificar praticamente todos os casos raros**;
+- Consegue encontrar quase todos eles;
+- Porém, acaba **classificando muitas manifestações comuns como se fossem raras**, mesmo quando não são;
+- Isso gera um grande número de erros desse tipo.
+
+De forma simples:  
+o **Random Forest prefere “não deixar passar nada”**, enquanto a **Regressão Logística prefere “errar menos”**.
+
+### O que mostram as matrizes de confusão
+
+As matrizes de confusão ajudam a visualizar esses comportamentos:
+
+- A **diagonal principal** concentra os acertos dos modelos;
+- Fora da diagonal estão os erros;
+- O Random Forest apresenta **mais erros espalhados**, principalmente envolvendo assuntos raros;
+- A Regressão Logística apresenta **erros mais concentrados e previsíveis**.
+
+Isso indica que a Regressão Logística é **mais estável**, enquanto o Random Forest é **mais sensível**, mas menos preciso em certos contextos.
+
+### Médias macro e ponderadas
+
+- As métricas que dão **peso igual a todos os assuntos** mostram que o Random Forest “se sai melhor” em temas raros, mas sem grande qualidade.
+- As métricas que dão **mais peso aos assuntos mais frequentes** mostram que **os dois modelos são praticamente equivalentes**.
+
+Ou seja, o ganho do Random Forest acontece principalmente onde há **poucos dados**, sem grande impacto no desempenho geral.
+
+## Conclusão Final
+
+- A **Regressão Logística** apresentou um desempenho **mais equilibrado**, cometendo menos erros graves e oferecendo classificações mais confiáveis.
+- O **Random Forest** mostrou potencial para identificar assuntos raros, mas **comete muitos erros ao fazer isso**, o que pode confundir a triagem automática.
+- Para o uso prático na Ouvidoria — onde **confiabilidade e clareza são fundamentais** — a **Regressão Logística é a escolha mais adequada**.
+- O Random Forest pode ser útil em situações específicas, desde que acompanhado de ajustes adicionais e revisão humana.
+
+### Conclusão prática
+
+> Para apoiar a triagem institucional das manifestações, a **Regressão Logística oferece o melhor equilíbrio entre simplicidade, confiabilidade e desempenho**.  
+> O **Random Forest é promissor**, mas exige cuidados extras para evitar classificações equivocadas, especialmente em assuntos menos frequentes.
+
+## Montar DataFrame para Power BI
+
+Para a etapa de visualização, foi exportada uma base específica contendo apenas os resultados do modelo de **Regressão Logística**, selecionado como o **mais adequado ao objetivo do estudo**.
+
+O dataset enviado ao Power BI inclui a **classe real**, a **classe prevista** e um **indicador de acerto**, além de **variáveis contextuais**, permitindo a avaliação do desempenho do modelo de forma clara e gerencial.
+
+Essa abordagem evita complexidade desnecessária, garante leveza no painel e facilita a interpretação dos resultados pelos gestores da **Ouvidoria**.
+
+```{python echo=FALSE}
+df_powerbi_ml = X_test.copy()
+df_powerbi_ml['assunto_real'] = y_test.values
+df_powerbi_ml['assunto_previsto'] = y_pred_logreg
+df_powerbi_ml['acerto'] = (df_powerbi_ml['assunto_real'] == df_powerbi_ml['assunto_previsto']).astype(int)
+
+arquivo_parquet = DATA_DIR / "manifestacoes_de_ouvidoria_regressao_logistica.parquet"
+df.to_parquet(
+    arquivo_parquet,
+    index=False
+)
+print("Base de dados ML salva em:", arquivo_parquet)
+```

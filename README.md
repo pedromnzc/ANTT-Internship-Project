@@ -10,7 +10,7 @@ Os dados brutos são convertidos para formato Parquet para otimização de armaz
 project/
 │
 ├── data/
-├── scripts/  # Script em Quarto Markdown
+├── scripts/  # Scripts em QMD e IPYNB
 ├── outputs/
 ├── README.md
 └── requirements.txt
@@ -23,23 +23,3 @@ project/
 - PyArrow
 - Qarto Markdown
 - Parquet
-
-## 🚀 Como Executar
-
-1. Clone o repositório:
-   ```bash
-   git clone
-   ```
-   
-2. Instale as dependências:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Execute os scripts em Qarto Markdown para processar os dados:
-   ```bash
-   quarto render scripts/ --to html
-   ```
-
-## 📊 Resultados
-Os dados processados estão disponíveis no formato Parquet, otimizados para análise e consulta eficiente em ferramentas de big data.

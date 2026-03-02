@@ -1,10 +1,10 @@
 # ANTT Internship Project 
 
-## 📌 Descrição
+## Descrição
 Projeto de ingestão e processamento de dados da Ouvidoria da ANTT.
 Os dados brutos são convertidos para formato Parquet para otimização de armazenamento e performance.
 
-## 🗂 Estrutura do Projeto
+## Estrutura do Projeto
 
 ```
 project/
@@ -16,7 +16,7 @@ project/
 └── requirements.txt
 ```
 
-## 🛠 Tecnologias Utilizadas
+## Tecnologias Utilizadas
 
 - Python
 - Pandas
